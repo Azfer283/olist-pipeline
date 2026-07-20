@@ -20,11 +20,18 @@ from agent.tools import (
 from utils.data_quality import log_dq_metrics, quarantine_records
 
 
+def _write_delta(spark, df, table):
+    df.createOrReplaceTempView("_delta_write_tmp")
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(f"CREATE TABLE {table} USING DELTA AS SELECT * FROM _delta_write_tmp")
+
+
 @pytest.fixture(scope="module")
 def bronze_db(spark):
     spark.sql("CREATE DATABASE IF NOT EXISTS olist_bronze")
     yield
     spark.sql("DROP DATABASE IF EXISTS olist_bronze CASCADE")
+    spark.sql("DROP TABLE IF EXISTS olist_silver.orders")
 
 
 class TestInspectTable:
@@ -32,24 +39,24 @@ class TestInspectTable:
         df = spark.createDataFrame(
             [("o1", "c1"), ("o2", None)], ["order_id", "customer_id"]
         )
-        df.write.mode("overwrite").format("delta").saveAsTable("olist_bronze.orders")
+        _write_delta(spark, df, "olist_bronze.orders")
 
         out = inspect_table(spark, "olist_bronze.orders")
 
         assert "Row count: 2" in out
         assert "customer_id: 1" in out
 
-    def test_missing_table(self, spark):
-        out = inspect_table(spark, "olist_bronze.does_not_exist")
+    def test_missing_table(self, spark, bronze_db):
+        out = inspect_table(spark, "olist_bronze.sellers")
         assert "does not exist" in out
 
 
 class TestCompareCounts:
     def test_shows_data_loss(self, spark, bronze_db):
         bronze = spark.createDataFrame([("o1",), ("o2",), ("o3",)], ["order_id"])
-        bronze.write.mode("overwrite").format("delta").saveAsTable("olist_bronze.orders")
+        _write_delta(spark, bronze, "olist_bronze.orders")
         silver = spark.createDataFrame([("o1",), ("o2",)], ["order_id"])
-        silver.write.mode("overwrite").format("delta").saveAsTable("olist_silver.orders")
+        _write_delta(spark, silver, "olist_silver.orders")
 
         out = compare_counts(spark)
 
@@ -85,12 +92,8 @@ class TestDqLogsAndQuarantine:
 
 class TestTraceRecord:
     def test_traces_across_layers(self, spark, bronze_db):
-        spark.createDataFrame([("o1",)], ["order_id"]).write.mode("overwrite").format(
-            "delta"
-        ).saveAsTable("olist_bronze.orders")
-        spark.createDataFrame([("o1",)], ["order_id"]).write.mode("overwrite").format(
-            "delta"
-        ).saveAsTable("olist_silver.orders")
+        _write_delta(spark, spark.createDataFrame([("o1",)], ["order_id"]), "olist_bronze.orders")
+        _write_delta(spark, spark.createDataFrame([("o1",)], ["order_id"]), "olist_silver.orders")
 
         out = trace_record(spark, "o1")
 

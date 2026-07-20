@@ -50,11 +50,11 @@ class TestRunDqChecks:
         spark.sql("""CREATE TABLE IF NOT EXISTS olist_silver.dq_log (
             table_name STRING, layer STRING, input_count LONG,
             output_count LONG, quarantined_count LONG, null_counts STRING, run_timestamp STRING
-        )""")
+        ) USING DELTA""")
         spark.sql("""CREATE TABLE IF NOT EXISTS olist_silver.quarantine (
             source_table STRING, rejection_reason STRING,
             quarantine_timestamp TIMESTAMP, record_json STRING
-        )""")
+        ) USING DELTA""")
 
     def test_deduplicates_on_primary_keys(self, spark):
         """run_dq_checks should remove duplicates based on primary_keys."""

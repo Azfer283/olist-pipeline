@@ -93,11 +93,11 @@ def pipeline_tables(spark):
     spark.sql("""CREATE TABLE IF NOT EXISTS olist_silver.dq_log (
         table_name STRING, layer STRING, input_count LONG,
         output_count LONG, quarantined_count LONG, null_counts STRING, run_timestamp STRING
-    )""")
+    ) USING DELTA""")
     spark.sql("""CREATE TABLE IF NOT EXISTS olist_silver.quarantine (
         source_table STRING, rejection_reason STRING,
         quarantine_timestamp TIMESTAMP, record_json STRING
-    )""")
+    ) USING DELTA""")
 
     yield
 
@@ -149,7 +149,7 @@ class TestBronzeToSilverIntegration:
 class TestSilverToGoldIntegration:
     """Test that Gold builders produce valid aggregations from Silver."""
 
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope="class")
     def _setup_silver(self, spark, pipeline_tables):
         """Ensure Silver tables exist before Gold tests run."""
         from silver.clean_orders import clean_orders
@@ -172,8 +172,10 @@ class TestSilverToGoldIntegration:
 
         df = spark.table("olist_gold.daily_sales_summary")
         # Only delivered orders should appear (ord_3 is shipped)
+        # ord_1 spans 2 categories (computers + furniture_decor) → 2 rows with order_count=1 each
+        # ord_2 spans 1 category (computers) → 1 row with order_count=1
         total_orders = df.agg(F.sum("order_count")).collect()[0][0]
-        assert total_orders == 2  # ord_1, ord_2
+        assert total_orders == 3  # ord_1 (×2 categories) + ord_2 (×1 category)
 
     def test_customer_ltv(self, spark, pipeline_tables):
         from gold.builders import build_customer_ltv

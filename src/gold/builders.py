@@ -19,6 +19,14 @@ def _assert_gold_quality(spark: SparkSession, gold_table: str, min_rows: int = 1
     return count
 
 
+def _write_delta(spark, df, table, partition_by=None):
+    """CTAS write — avoids DataFrameWriter V2 OverwriteByExpression truncate issue."""
+    df.createOrReplaceTempView("_delta_write_tmp")
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    partition_clause = f"PARTITIONED BY ({partition_by})" if partition_by else ""
+    spark.sql(f"CREATE TABLE {table} USING DELTA {partition_clause} AS SELECT * FROM _delta_write_tmp")
+
+
 def build_daily_sales_summary(spark: SparkSession, gold_table: str):
     """Build daily sales summary from Silver tables."""
 
@@ -74,13 +82,7 @@ def build_daily_sales_summary(spark: SparkSession, gold_table: str):
         .withColumn("year_month", F.date_format("order_date", "yyyy-MM"))
     )
 
-    (
-        summary.write
-        .mode("overwrite")
-        .format("delta")
-        .partitionBy("year_month")
-        .saveAsTable(gold_table)
-    )
+    _write_delta(spark, summary, gold_table, partition_by="year_month")
 
     count = _assert_gold_quality(spark, gold_table)
     print(f"[Gold] {gold_table}: {count} rows")
@@ -143,12 +145,7 @@ def build_customer_ltv(spark: SparkSession, gold_table: str):
         )
     )
 
-    (
-        ltv.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(gold_table)
-    )
+    _write_delta(spark, ltv, gold_table)
 
     count = _assert_gold_quality(spark, gold_table)
     print(f"[Gold] {gold_table}: {count} rows")
@@ -208,12 +205,7 @@ def build_seller_performance(spark: SparkSession, gold_table: str):
         )
     )
 
-    (
-        performance.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(gold_table)
-    )
+    _write_delta(spark, performance, gold_table)
 
     count = _assert_gold_quality(spark, gold_table)
     print(f"[Gold] {gold_table}: {count} rows")
@@ -273,13 +265,7 @@ def build_order_fulfillment(spark: SparkSession, gold_table: str):
         )
     )
 
-    (
-        fulfillment.write
-        .mode("overwrite")
-        .format("delta")
-        .partitionBy("year_month")
-        .saveAsTable(gold_table)
-    )
+    _write_delta(spark, fulfillment, gold_table, partition_by="year_month")
 
     count = _assert_gold_quality(spark, gold_table)
     print(f"[Gold] {gold_table}: {count} rows")
@@ -322,12 +308,7 @@ def build_product_category_performance(spark: SparkSession, gold_table: str):
         )
     )
 
-    (
-        performance.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(gold_table)
-    )
+    _write_delta(spark, performance, gold_table)
 
     count = _assert_gold_quality(spark, gold_table)
     print(f"[Gold] {gold_table}: {count} rows")

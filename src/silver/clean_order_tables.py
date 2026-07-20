@@ -13,6 +13,12 @@ from utils.schema_definitions import (
 )
 
 
+def _write_delta(spark, df, table):
+    df.createOrReplaceTempView("_delta_write_tmp")
+    spark.sql(f"DROP TABLE IF EXISTS {table}")
+    spark.sql(f"CREATE TABLE {table} USING DELTA AS SELECT * FROM _delta_write_tmp")
+
+
 def clean_order_items(spark: SparkSession, bronze_table: str, silver_table: str):
     """Clean order items."""
     df = spark.table(bronze_table).drop(*BRONZE_META_COLS)
@@ -37,12 +43,7 @@ def clean_order_items(spark: SparkSession, bronze_table: str, silver_table: str)
     # Enforce Silver schema contract
     df = enforce_schema(df, ORDER_ITEMS_SILVER_SCHEMA)
 
-    (
-        df.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(silver_table)
-    )
+    _write_delta(spark, df, silver_table)
 
     count = spark.table(silver_table).count()
     print(f"[Silver] {silver_table}: {count} rows written")
@@ -72,12 +73,7 @@ def clean_order_payments(spark: SparkSession, bronze_table: str, silver_table: s
     # Enforce Silver schema contract
     df = enforce_schema(df, ORDER_PAYMENTS_SILVER_SCHEMA)
 
-    (
-        df.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(silver_table)
-    )
+    _write_delta(spark, df, silver_table)
 
     count = spark.table(silver_table).count()
     print(f"[Silver] {silver_table}: {count} rows written")
@@ -107,12 +103,7 @@ def clean_order_reviews(spark: SparkSession, bronze_table: str, silver_table: st
     # Enforce Silver schema contract
     df = enforce_schema(df, ORDER_REVIEWS_SILVER_SCHEMA)
 
-    (
-        df.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(silver_table)
-    )
+    _write_delta(spark, df, silver_table)
 
     count = spark.table(silver_table).count()
     print(f"[Silver] {silver_table}: {count} rows written")

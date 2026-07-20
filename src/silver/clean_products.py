@@ -51,13 +51,10 @@ def clean_products(spark: SparkSession, bronze_table: str, silver_table: str):
     # Enforce Silver schema contract
     df = enforce_schema(df, PRODUCTS_SILVER_SCHEMA)
 
-    # Write Silver
-    (
-        df.write
-        .mode("overwrite")
-        .format("delta")
-        .saveAsTable(silver_table)
-    )
+    # Write Silver — CTAS avoids DataFrameWriter V2 OverwriteByExpression issue
+    df.createOrReplaceTempView("_delta_write_tmp")
+    spark.sql(f"DROP TABLE IF EXISTS {silver_table}")
+    spark.sql(f"CREATE TABLE {silver_table} USING DELTA AS SELECT * FROM _delta_write_tmp")
 
     count = spark.table(silver_table).count()
     print(f"[Silver] {silver_table}: {count} rows written")

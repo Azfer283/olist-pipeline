@@ -44,7 +44,7 @@ class TestQuarantineRecords:
 
     def test_splits_good_and_bad(self, spark):
         """quarantine_records should split df into good/bad based on condition."""
-        # Quarantine table created by conftest.py session fixture
+        spark.sql("CREATE DATABASE IF NOT EXISTS olist_silver")
         spark.sql("""
             CREATE TABLE IF NOT EXISTS olist_silver.quarantine (
                 source_table STRING, rejection_reason STRING,
