@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Spark / Delta
+metastore_db/
+derby.log
+spark-warehouse/
+
+# Databricks
+.databricks/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+debug.log
+*.log
+
+# Data files (don't commit raw data)
+data/*.csv
+data/*.parquet
+*.zip

@@ -1,0 +1,13 @@
+# Core
+pyspark>=3.4.0
+delta-spark>=2.4.0
+
+# Agent (Phase 2) — local, free LLM via Ollama
+langchain>=0.2.0,<1.0
+langchain-ollama>=0.1.0,<1.0
+
+# Testing
+pytest>=7.0.0
+
+# Dev
+ruff>=0.1.0

@@ -1,0 +1,100 @@
+bundle:
+  name: olist-pipeline
+
+variables:
+  source_data_path:
+    description: "DBFS path to source CSV files"
+    default: "/FileStore/olist/raw"
+
+workspace:
+  host: ${DATABRICKS_HOST}
+
+resources:
+  jobs:
+    olist_bronze_ingestion:
+      name: "Olist - Bronze Ingestion"
+      tasks:
+        - task_key: ingest_all
+          notebook_task:
+            notebook_path: src/bronze/ingest_all.py
+            base_parameters:
+              source_data_path: ${var.source_data_path}
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: "singleNode"
+
+    olist_silver_cleaning:
+      name: "Olist - Silver Cleaning"
+      tasks:
+        - task_key: clean_all
+          depends_on:
+            - task_key: ingest_all
+          notebook_task:
+            notebook_path: src/silver/clean_all.py
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: "singleNode"
+
+    olist_gold_build:
+      name: "Olist - Gold Aggregations"
+      tasks:
+        - task_key: build_all
+          depends_on:
+            - task_key: clean_all
+          notebook_task:
+            notebook_path: src/gold/build_all.py
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: "singleNode"
+
+    olist_full_pipeline:
+      name: "Olist - Full Pipeline (Bronze → Silver → Gold)"
+      tasks:
+        - task_key: bronze_ingest
+          notebook_task:
+            notebook_path: src/bronze/ingest_all.py
+            base_parameters:
+              source_data_path: ${var.source_data_path}
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: "singleNode"
+        - task_key: silver_clean
+          depends_on:
+            - task_key: bronze_ingest
+          notebook_task:
+            notebook_path: src/silver/clean_all.py
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: "singleNode"
+        - task_key: gold_build
+          depends_on:
+            - task_key: silver_clean
+          notebook_task:
+            notebook_path: src/gold/build_all.py
+          new_cluster:
+            spark_version: "13.3.x-scala2.12"
+            node_type_id: "Standard_DS3_v2"
+            num_workers: 0
+            spark_conf:
+              spark.master: "local[*]"
+              spark.databricks.cluster.profile: "singleNode"

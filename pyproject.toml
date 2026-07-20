@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests that require full Spark operations",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
