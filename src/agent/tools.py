@@ -132,7 +132,7 @@ def trace_record(spark: SparkSession, order_id: str) -> str:
 
     if _exists(spark, QUARANTINE_TABLE):
         q = spark.table(QUARANTINE_TABLE).filter(
-            F.col("record_json").contains(f'"order_id": "{order_id}"')
+            F.col("record_json").contains(f'"order_id":"{order_id}"')
         ).count()
         if q:
             lines.append(f"- Quarantine: {q} matching record(s) — this order was rejected.")

@@ -49,6 +49,7 @@ for table_key, build_fn in gold_jobs:
     except Exception as e:
         results[table_key] = {"status": "FAILED", "error": str(e)}
         print(f"[ERROR] {gold_table}: {e}")
+        raise RuntimeError(f"Gold build failed for {gold_table}: {e}") from e
 
 # COMMAND ----------
 

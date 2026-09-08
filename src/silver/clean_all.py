@@ -74,6 +74,7 @@ for table_key, clean_fn in cleaning_jobs:
     except Exception as e:
         results[table_key] = {"status": "FAILED", "error": str(e)}
         print(f"[ERROR] {silver}: {e}")
+        raise RuntimeError(f"Silver cleaning failed for {silver}: {e}") from e
 
 # COMMAND ----------
 

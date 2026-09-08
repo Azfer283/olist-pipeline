@@ -160,11 +160,19 @@ def build_seller_performance(spark: SparkSession, gold_table: str):
     reviews = spark.table(SILVER_TABLES["order_reviews"])
     sellers = spark.table(SILVER_TABLES["sellers"])
 
+    # Deduplicate reviews to one score per order (multiple reviews per order
+    # exist in Silver; joining without dedup fans out rows and inflates revenue)
+    order_reviews = (
+        reviews
+        .groupBy("order_id")
+        .agg(F.avg("review_score").alias("review_score"))
+    )
+
     # Join
     df = (
         items
         .join(orders, "order_id", "inner")
-        .join(reviews.select("order_id", "review_score"), "order_id", "left")
+        .join(order_reviews, "order_id", "left")
         .join(sellers, "seller_id", "inner")
     )
 
@@ -280,11 +288,19 @@ def build_product_category_performance(spark: SparkSession, gold_table: str):
     orders = spark.table(SILVER_TABLES["orders"])
     reviews = spark.table(SILVER_TABLES["order_reviews"])
 
+    # Deduplicate reviews to one score per order (multiple reviews per order
+    # exist in Silver; joining without dedup fans out rows and inflates revenue)
+    order_reviews = (
+        reviews
+        .groupBy("order_id")
+        .agg(F.avg("review_score").alias("review_score"))
+    )
+
     df = (
         items
         .join(products, "product_id", "inner")
         .join(orders, "order_id", "inner")
-        .join(reviews.select("order_id", "review_score"), "order_id", "left")
+        .join(order_reviews, "order_id", "left")
     )
 
     df = df.filter(F.col("order_status") == "delivered")

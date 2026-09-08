@@ -1,19 +1,33 @@
 """
-Tests for Silver cleaning layer.
-Validates type casting, dedup logic, and quarantine behavior.
-Tests run against a real local SparkSession.
+Tests for the Silver cleaning layer.
+
+The data-quality utility tests exercise data_quality.py directly. The clean-*
+tests call the REAL clean_* functions against small in-memory Bronze fixtures
+(registered as temp views for the source arg; clean_products also needs the
+fixed olist_bronze.category_translation table) and assert on the actual Silver
+output tables.
 """
 
 import pytest
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
-    StructType, StructField, StringType, IntegerType, DoubleType, TimestampType,
+    StructType, StructField, StringType, IntegerType, DoubleType, DecimalType, TimestampType,
 )
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from utils.data_quality import check_nulls, quarantine_records, enforce_schema
+from utils.schema_definitions import (
+    BRONZE_TABLES,
+    ORDERS_RAW_SCHEMA, PRODUCTS_RAW_SCHEMA, ORDER_ITEMS_RAW_SCHEMA,
+    ORDER_REVIEWS_RAW_SCHEMA, CATEGORY_TRANSLATION_RAW_SCHEMA,
+    ORDERS_SILVER_SCHEMA, PRODUCTS_SILVER_SCHEMA, ORDER_ITEMS_SILVER_SCHEMA,
+    ORDER_REVIEWS_SILVER_SCHEMA,
+)
+from silver.clean_orders import clean_orders
+from silver.clean_products import clean_products
+from silver.clean_order_tables import clean_order_items, clean_order_reviews
 
 
 class TestDataQualityUtils:
@@ -84,121 +98,99 @@ class TestQuarantineRecords:
         assert q_count == 0
 
 
-class TestCleanOrdersLogic:
-    """Test orders cleaning transformations (without writing to tables)."""
+class TestCleanOrders:
+    """Test the real clean_orders transformation Bronze -> Silver."""
 
-    def test_timestamp_casting(self, spark):
-        """String timestamps should cast to TimestampType."""
-        df = spark.createDataFrame(
-            [("2023-01-15 10:30:00",)],
-            schema=["order_purchase_timestamp"],
-        )
-        df = df.withColumn("order_purchase_timestamp", F.to_timestamp("order_purchase_timestamp"))
+    def test_casts_dedups_quarantines_and_partitions(self, spark):
+        rows = [
+            # order_id, customer_id, status, purchase, approved, carrier, delivered, estimated
+            ("O1", "C1", "delivered", "2023-03-15 10:30:00", None, None, None, None),
+            ("O1", "C1", "delivered", "2023-03-15 10:30:00", None, None, None, None),  # dup PK
+            (None, "C2", "delivered", "2023-03-16 09:00:00", None, None, None, None),  # null PK -> quarantine
+        ]
+        spark.createDataFrame(rows, ORDERS_RAW_SCHEMA).createOrReplaceTempView("bronze_orders_fixture")
 
-        assert df.schema["order_purchase_timestamp"].dataType == TimestampType()
-        row = df.collect()[0]
-        assert row.order_purchase_timestamp.year == 2023
-        assert row.order_purchase_timestamp.month == 1
+        clean_orders(spark, "bronze_orders_fixture", "olist_silver.orders_clean_test")
+        out = spark.table("olist_silver.orders_clean_test")
 
-    def test_year_month_partition_format(self, spark):
-        """year_month partition column should be yyyy-MM format."""
-        df = spark.createDataFrame(
-            [("2023-03-15 10:30:00",)],
-            schema=["order_purchase_timestamp"],
-        )
-        df = df.withColumn("order_purchase_timestamp", F.to_timestamp("order_purchase_timestamp"))
-        df = df.withColumn(
-            "order_purchase_year_month",
-            F.date_format("order_purchase_timestamp", "yyyy-MM"),
-        )
-
-        result = df.collect()[0].order_purchase_year_month
-        assert result == "2023-03"
-
-    def test_dedup_keeps_one_per_key(self, spark):
-        """dropDuplicates on order_id should keep exactly one row per key."""
-        df = spark.createDataFrame(
-            [("ord_1", "a"), ("ord_1", "b"), ("ord_2", "c")],
-            schema=["order_id", "customer_id"],
-        )
-        df = df.dropDuplicates(["order_id"])
-        assert df.count() == 2
+        # dedup on order_id + quarantine of the null order_id -> one surviving row
+        assert out.count() == 1
+        assert out.schema["order_purchase_timestamp"].dataType == TimestampType()
+        assert out.collect()[0].order_purchase_year_month == "2023-03"
+        # enforce_schema yields exactly the Silver contract columns, in order
+        assert out.columns == [f.name for f in ORDERS_SILVER_SCHEMA.fields]
 
 
-class TestCleanProductsLogic:
-    """Test products cleaning transformations."""
+class TestCleanProducts:
+    """Test the real clean_products transformation (rename typos, cast, translate)."""
 
-    def test_typo_column_rename(self, spark):
-        """'lenght' columns should be renamed to 'length'."""
-        df = spark.createDataFrame(
-            [(10, 20)],
-            schema=["product_name_lenght", "product_description_lenght"],
-        )
-        df = (
-            df
-            .withColumnRenamed("product_name_lenght", "product_name_length")
-            .withColumnRenamed("product_description_lenght", "product_description_length")
-        )
+    def test_renames_typos_casts_and_translates(self, spark):
+        spark.sql("CREATE DATABASE IF NOT EXISTS olist_bronze")
+        spark.sql(f"DROP TABLE IF EXISTS {BRONZE_TABLES['category_translation']}")
+        spark.createDataFrame(
+            [("beleza_saude", "health_beauty")],
+            CATEGORY_TRANSLATION_RAW_SCHEMA,
+        ).write.format("delta").saveAsTable(BRONZE_TABLES["category_translation"])
 
-        col_names = df.columns
-        assert "product_name_length" in col_names
-        assert "product_description_length" in col_names
-        assert "product_name_lenght" not in col_names
+        rows = [
+            # product_id, category, name_lenght, desc_lenght, photos, weight, length, height, width
+            ("P1", "beleza_saude", "10", "20", "3", "500", "10", "5", "8"),
+            ("P1", "beleza_saude", "10", "20", "3", "500", "10", "5", "8"),  # dup PK
+        ]
+        spark.createDataFrame(rows, PRODUCTS_RAW_SCHEMA).createOrReplaceTempView("bronze_products_fixture")
 
-    def test_int_casting(self, spark):
-        """String numeric columns should cast to IntegerType."""
-        df = spark.createDataFrame(
-            [("100", "50")],
-            schema=["product_weight_g", "product_height_cm"],
-        )
-        df = df.withColumn("product_weight_g", F.col("product_weight_g").cast("int"))
-        df = df.withColumn("product_height_cm", F.col("product_height_cm").cast("int"))
+        clean_products(spark, "bronze_products_fixture", "olist_silver.products_clean_test")
+        out = spark.table("olist_silver.products_clean_test")
 
-        assert df.schema["product_weight_g"].dataType == IntegerType()
-        assert df.schema["product_height_cm"].dataType == IntegerType()
-        assert df.collect()[0].product_weight_g == 100
+        assert out.count() == 1  # dedup on product_id
+        assert "product_name_length" in out.columns
+        assert "product_name_lenght" not in out.columns
+        assert out.schema["product_weight_g"].dataType == IntegerType()
+        assert out.collect()[0].product_category_name_english == "health_beauty"
+        assert out.columns == [f.name for f in PRODUCTS_SILVER_SCHEMA.fields]
 
 
-class TestCleanOrderItemsLogic:
-    """Test order items cleaning transformations."""
+class TestCleanOrderItems:
+    """Test the real clean_order_items transformation."""
 
-    def test_price_freight_cast_to_double(self, spark):
-        """price and freight_value should become DoubleType."""
-        df = spark.createDataFrame(
-            [("29.99", "7.50")],
-            schema=["price", "freight_value"],
-        )
-        df = df.withColumn("price", F.col("price").cast("double"))
-        df = df.withColumn("freight_value", F.col("freight_value").cast("double"))
+    def test_casts_and_dedups_composite_key(self, spark):
+        rows = [
+            # order_id, order_item_id, product_id, seller_id, shipping_limit, price, freight
+            ("O1", "1", "P1", "S1", "2023-01-01 00:00:00", "29.99", "7.50"),
+            ("O1", "1", "P1", "S1", "2023-01-01 00:00:00", "29.99", "7.50"),  # dup composite key
+            ("O1", "2", "P1", "S1", "2023-01-01 00:00:00", "10.00", "2.00"),
+            ("O2", "1", "P2", "S2", "2023-01-01 00:00:00", "5.00", "1.00"),
+        ]
+        spark.createDataFrame(rows, ORDER_ITEMS_RAW_SCHEMA).createOrReplaceTempView("bronze_items_fixture")
 
-        assert df.schema["price"].dataType == DoubleType()
-        assert df.schema["freight_value"].dataType == DoubleType()
-        assert abs(df.collect()[0].price - 29.99) < 0.01
+        clean_order_items(spark, "bronze_items_fixture", "olist_silver.items_clean_test")
+        out = spark.table("olist_silver.items_clean_test")
 
-    def test_composite_key_dedup(self, spark):
-        """Dedup on (order_id, order_item_id) should keep unique combos."""
-        df = spark.createDataFrame(
-            [("ord_1", 1), ("ord_1", 1), ("ord_1", 2), ("ord_2", 1)],
-            schema=["order_id", "order_item_id"],
-        )
-        df = df.dropDuplicates(["order_id", "order_item_id"])
-        assert df.count() == 3  # (ord_1,1), (ord_1,2), (ord_2,1)
+        assert out.count() == 3  # dedup on (order_id, order_item_id)
+        assert out.schema["order_item_id"].dataType == IntegerType()
+        assert out.schema["price"].dataType == DecimalType(10, 2)
+        assert out.columns == [f.name for f in ORDER_ITEMS_SILVER_SCHEMA.fields]
 
 
-class TestCleanOrderReviewsLogic:
-    """Test order reviews cleaning transformations."""
+class TestCleanOrderReviews:
+    """Test the real clean_order_reviews transformation."""
 
-    def test_review_score_cast_to_int(self, spark):
-        """review_score string should cast to IntegerType."""
-        df = spark.createDataFrame(
-            [("5",), ("3",), ("1",)],
-            schema=["review_score"],
-        )
-        df = df.withColumn("review_score", F.col("review_score").cast("int"))
+    def test_casts_score_and_dedups(self, spark):
+        rows = [
+            # review_id, order_id, score, title, message, creation, answer
+            ("RV1", "O1", "5", None, None, None, None),
+            ("RV1", "O1", "5", None, None, None, None),  # dup review_id
+            ("RV2", "O1", "3", None, None, None, None),
+        ]
+        spark.createDataFrame(rows, ORDER_REVIEWS_RAW_SCHEMA).createOrReplaceTempView("bronze_reviews_fixture")
 
-        assert df.schema["review_score"].dataType == IntegerType()
-        scores = [row.review_score for row in df.collect()]
-        assert sorted(scores) == [1, 3, 5]
+        clean_order_reviews(spark, "bronze_reviews_fixture", "olist_silver.reviews_clean_test")
+        out = spark.table("olist_silver.reviews_clean_test")
+
+        assert out.count() == 2  # dedup on review_id
+        assert out.schema["review_score"].dataType == IntegerType()
+        assert sorted(r.review_score for r in out.collect()) == [3, 5]
+        assert out.columns == [f.name for f in ORDER_REVIEWS_SILVER_SCHEMA.fields]
 
 
 class TestEnforceSchema:
@@ -206,8 +198,6 @@ class TestEnforceSchema:
 
     def test_selects_correct_columns_in_order(self, spark):
         """enforce_schema should select only schema columns in schema order."""
-        from pyspark.sql.types import StructType, StructField
-
         schema = StructType([
             StructField("b", StringType(), True),
             StructField("a", IntegerType(), True),
@@ -223,8 +213,6 @@ class TestEnforceSchema:
 
     def test_casts_types_to_match_schema(self, spark):
         """enforce_schema should cast columns to the schema's data types."""
-        from pyspark.sql.types import StructType, StructField
-
         schema = StructType([
             StructField("price", DoubleType(), True),
             StructField("qty", IntegerType(), True),
